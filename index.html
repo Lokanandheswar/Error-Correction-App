@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Autocorrect Tool</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+            color: #333;
+        }
+        .container {
+            max-width: 900px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background-color: #ffffff;
+            border-radius: 1rem;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #1f2937;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        textarea {
+            min-height: 180px;
+            resize: vertical;
+            font-size: 1.1rem;
+            line-height: 1.6;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #3b82f6; /* Blue-500 */
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .message-box {
+            padding: 1rem;
+            border-radius: 0.75rem;
+            margin-top: 1.5rem;
+            text-align: center;
+            font-weight: 600;
+            display: none; /* Hidden by default */
+        }
+        .message-box.error {
+            background-color: #fee2e2; /* Red-100 */
+            color: #dc2626; /* Red-700 */
+            border: 1px solid #ef4444; /* Red-500 */
+        }
+        .message-box.info {
+            background-color: #e0f2fe; /* Light Blue-100 */
+            color: #0c4a6e; /* Cyan-900 */
+            border: 1px solid #7dd3fc; /* Light Blue-300 */
+        }
+    </style>
+</head>
+<body class="p-4">
+    <div class="container">
+        <h1 class="header">AI-Powered Autocorrect Tool</h1>
+
+        <div class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-sm">
+            <p class="font-semibold mb-2">How to use:</p>
+            <ul class="list-disc list-inside space-y-1">
+                <li>Type or paste text into the "Your Text" box.</li>
+                <li>Select the language for correction.</li>
+                <li>The corrected text will appear below automatically after a short pause in typing, or click "Correct Text".</li>
+            </ul>
+        </div>
+
+        <div class="mb-4">
+            <label for="languageSelect" class="block text-lg font-semibold text-gray-700 mb-2">Select Language:</label>
+            <select id="languageSelect" class="block w-full md:w-1/3 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <option value="English">English</option>
+                <option value="Spanish">Spanish</option>
+                <option value="French">French</option>
+                <option value="German">German</option>
+                <option value="Italian">Italian</option>
+                <option value="Portuguese">Portuguese</option>
+                <!-- Add more languages as needed for specific LLM support -->
+            </select>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <!-- Original Text Input -->
+            <div class="bg-gray-50 p-6 rounded-xl shadow-md border border-gray-200 flex flex-col">
+                <label for="inputText" class="block text-lg font-semibold text-gray-700 mb-3">Your Text:</label>
+                <textarea id="inputText" class="w-full flex-grow p-4 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white shadow-sm" placeholder="Start typing here..."></textarea>
+            </div>
+
+            <!-- Corrected Text Output -->
+            <div class="bg-blue-50 p-6 rounded-xl shadow-md border border-blue-200 flex flex-col">
+                <label for="correctedText" class="block text-lg font-semibold text-blue-800 mb-3">Corrected Text:</label>
+                <textarea id="correctedText" class="w-full flex-grow p-4 border border-blue-300 rounded-lg focus:outline-none bg-white text-blue-900 shadow-sm" placeholder="Corrected text will appear here..." readonly></textarea>
+            </div>
+        </div>
+
+        <button id="correctButton" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out flex items-center justify-center gap-3 shadow-lg">
+            <span id="buttonText">Correct Text</span>
+            <div id="loadingSpinner" class="loading-spinner hidden"></div>
+        </button>
+
+        <div id="messageBox" class="message-box"></div>
+    </div>
+
+    <script type="module">
+        // Get DOM elements
+        const languageSelect = document.getElementById('languageSelect');
+        const inputTextarea = document.getElementById('inputText');
+        const correctedTextarea = document.getElementById('correctedText');
+        const correctButton = document.getElementById('correctButton');
+        const buttonTextSpan = document.getElementById('buttonText');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const messageBox = document.getElementById('messageBox');
+
+        // Debounce variables for real-time correction
+        let debounceTimer;
+        const DEBOUNCE_DELAY = 1000; // 1 second
+
+        /**
+         * Debounces a function call, ensuring it's not called too frequently.
+         * @param {function} func - The function to debounce.
+         * @param {number} delay - The delay in milliseconds.
+         */
+        const debounce = (func, delay) => {
+            return function(...args) {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => func.apply(this, args), delay);
+            };
+        };
+
+        /**
+         * Sets the loading state of the UI.
+         * @param {boolean} isLoading - True to show loading, false to hide.
+         */
+        const setLoading = (isLoading) => {
+            correctButton.disabled = isLoading;
+            inputTextarea.disabled = isLoading; // Disable input during loading
+            if (isLoading) {
+                buttonTextSpan.textContent = 'Correcting...';
+                loadingSpinner.classList.remove('hidden');
+                messageBox.classList.add('hidden'); // Hide message box during loading
+            } else {
+                buttonTextSpan.textContent = 'Correct Text';
+                loadingSpinner.classList.add('hidden');
+            }
+        };
+
+        /**
+         * Displays a message to the user.
+         * @param {string} message - The message content.
+         * @param {'error'|'info'|''} type - The type of message for styling.
+         */
+        const displayMessage = (message, type) => {
+            messageBox.textContent = message;
+            messageBox.className = 'message-box'; // Reset classes
+            if (message) {
+                messageBox.classList.remove('hidden');
+                if (type === 'error') {
+                    messageBox.classList.add('error');
+                } else if (type === 'info') {
+                    messageBox.classList.add('info');
+                }
+            } else {
+                messageBox.classList.add('hidden');
+            }
+        };
+
+        /**
+         * Calls the AI model to perform autocorrection.
+         */
+        const performAutocorrect = async () => {
+            const inputText = inputTextarea.value.trim();
+            const selectedLanguage = languageSelect.value;
+
+            if (!inputText) {
+                correctedTextarea.value = ''; // Clear output if input is empty
+                displayMessage('Please enter some text to correct.', 'info');
+                return;
+            }
+
+            setLoading(true);
+            correctedTextarea.value = 'Analyzing and correcting...'; // Show immediate feedback
+
+            try {
+                // Construct the prompt for the AI model
+                const prompt = `As an advanced autocorrect AI, meticulously analyze the following text for spelling errors, grammatical mistakes, punctuation issues, and awkward phrasing. Rewrite the text to be accurate, fluent, and natural-sounding in ${selectedLanguage}. ONLY provide the corrected version of the text. Do NOT include any explanations, comments, or additional text.
+
+Original text:
+"${inputText}"
+
+Corrected text:`;
+
+                let chatHistory = [];
+                chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+
+                const payload = { contents: chatHistory };
+                // IMPORTANT: If running this code locally (not in the Canvas environment),
+                // you must replace "YOUR_GEMINI_API_KEY_HERE" with your actual Google Cloud API Key.
+                // Otherwise, the API call will fail.
+                const apiKey = ""; // For local testing, replace this with your actual API key if not running in Canvas
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${AIzaSyCZnzdLLB4ystHBem3-WuqBAi70eeMb3cU}`;
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`API error: ${response.status} ${response.statusText} - ${errorData.error?.message || 'Unknown error'}`);
+                }
+
+                const result = await response.json();
+
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    correctedTextarea.value = result.candidates[0].content.parts[0].text.trim();
+                    displayMessage('Text corrected successfully!', 'info');
+                } else {
+                    correctedTextarea.value = 'Could not generate a correction.';
+                    displayMessage('No correction received from AI. Please try again.', 'error');
+                }
+
+            } catch (error) {
+                console.error('Autocorrect error:', error);
+                correctedTextarea.value = 'Error during correction.';
+                displayMessage(`Failed to correct text: ${error.message}`, 'error');
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        // Event Listeners
+        // Real-time correction with debounce on input change
+        inputTextarea.addEventListener('input', debounce(performAutocorrect, DEBOUNCE_DELAY));
+        // Manual trigger button
+        correctButton.addEventListener('click', performAutocorrect);
+        // Trigger correction when language selection changes
+        languageSelect.addEventListener('change', performAutocorrect);
+
+        // Initial message
+        displayMessage('Start typing to see corrections.', 'info');
+    </script>
+</body>
+</html>
